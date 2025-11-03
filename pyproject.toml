@@ -1,0 +1,15 @@
+[project]
+name = "autodealer"
+version = "0.0.1"
+description = "Python library-wrapper for AutoDealer system"
+authors = [{ name = "Amal Khasanbaev" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "fdb>=2.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
