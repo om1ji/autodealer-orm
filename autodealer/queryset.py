@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Generic, TypeVar
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import String, delete, func, literal, select, type_coerce, update
+from sqlalchemy.types import NullType
 from sqlalchemy.orm import sessionmaker
 
 
@@ -79,13 +80,19 @@ class QuerySet(Generic[T]):
 
     def _resolve_field(self, key: str):
         """Support double-underscore lookups: name__contains, age__gte, etc."""
+        # literal() is required for LIKE patterns to avoid a sqlalchemy-firebird
+        # bug where the Firebird type compiler receives the column length as `name`
+        # instead of the type name, causing TypeError during SQL compilation.
         lookups = {
             "exact":      lambda col, v: col == v,
-            "iexact":     lambda col, v: col.ilike(v),
-            "contains":   lambda col, v: col.like(f"%{v}%"),
-            "icontains":  lambda col, v: col.ilike(f"%{v}%"),
-            "startswith": lambda col, v: col.like(f"{v}%"),
-            "endswith":   lambda col, v: col.like(f"%{v}"),
+            # type_coerce(..., NullType()) prevents sqlalchemy-firebird from
+            # calling visit_VARCHAR on the bind parameter, which has a bug
+            # where _render_string_type receives swapped positional arguments.
+            "iexact":     lambda col, v: col.ilike(type_coerce(v, NullType())),
+            "contains":   lambda col, v: col.like(type_coerce(f"%{v}%", NullType())),
+            "icontains":  lambda col, v: col.ilike(type_coerce(f"%{v}%", NullType())),
+            "startswith": lambda col, v: col.like(type_coerce(f"{v}%", NullType())),
+            "endswith":   lambda col, v: col.like(type_coerce(f"%{v}", NullType())),
             "gt":         lambda col, v: col > v,
             "gte":        lambda col, v: col >= v,
             "lt":         lambda col, v: col < v,
