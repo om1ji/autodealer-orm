@@ -20,7 +20,7 @@ def pytest_configure(config: pytest.Config) -> None:
     configure_database(
         host="192.168.88.64",
         port=3050,
-        database=r"C:\Program Files (x86)\AutoDealer\AutoDealer\Database\Autodealer061221.fdb",
+        database=r"C:\Program Files (x86)\AutoDealer\AutoDealer\Database\StOm1.fdb",
         user="SYSDBA",
         password="masterkey",
         charset="UTF8",

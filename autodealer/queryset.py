@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Generic, TypeVar
 
-from sqlalchemy import String, delete, func, literal, select, type_coerce, update
+from sqlalchemy import String, delete, func, insert, literal, select, type_coerce, update
 from sqlalchemy.types import NullType
 from sqlalchemy.orm import sessionmaker
 
@@ -107,6 +107,16 @@ class QuerySet(Generic[T]):
             return lookups[lookup], col
         col = getattr(self._model, key)
         return lookups["exact"], col
+
+    @staticmethod
+    def _coerce_strings(kwargs: dict) -> dict:
+        """Wrap str values with type_coerce(..., NullType()) to avoid the
+        sqlalchemy-firebird bug where _render_string_type receives swapped
+        arguments during INSERT/UPDATE compilation."""
+        return {
+            k: type_coerce(v, NullType()) if isinstance(v, str) else v
+            for k, v in kwargs.items()
+        }
 
     def _build_stmt(self):
         stmt = select(self._model)
@@ -341,10 +351,10 @@ class QuerySet(Generic[T]):
         Session = sessionmaker(bind=_get_engine(), expire_on_commit=False)
         session = Session()
         try:
-            obj = self._model(**kwargs)
-            session.add(obj)
+            session.execute(insert(self._model).values(**self._coerce_strings(kwargs)))
             session.commit()
-            return obj
+            # Return a detached instance with the supplied values.
+            return self._model(**kwargs)
         except Exception:
             session.rollback()
             raise
@@ -367,7 +377,7 @@ class QuerySet(Generic[T]):
         stmt = update(self._model)
         for w in self._wheres:
             stmt = stmt.where(w)
-        stmt = stmt.values(**kwargs)
+        stmt = stmt.values(**self._coerce_strings(kwargs))
         with _session_scope() as session:
             result = session.execute(stmt)
             return result.rowcount

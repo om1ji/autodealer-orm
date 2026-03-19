@@ -23,7 +23,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Generator, Iterator, Sequence
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
 from sqlalchemy.orm import DeclarativeBase, Session, scoped_session, sessionmaker
 
@@ -35,6 +35,35 @@ DIRECT_URL_ENV_KEYS: Sequence[str] = (
 
 _config_override: DatabaseConfig | None = None
 engine: Engine | None = None
+_session_user_id: int | None = None
+
+
+def set_session_user(user_id: int) -> None:
+    """Установить ID пользователя для Firebird-триггеров.
+
+    Триггеры AutoDealer (например, ``ORGANIZATION_AU``) определяют автора
+    изменения через таблицу ``USER_CONNECTION``:
+
+    .. code-block:: sql
+
+        SELECT USER_ID FROM USER_CONNECTION
+        WHERE USER_CONNECTION_ID = CURRENT_CONNECTION
+        INTO :CONNECTED_USER_ID;
+
+    После вызова этой функции каждый ``session_scope()`` будет автоматически
+    регистрировать текущее соединение в ``USER_CONNECTION`` перед выполнением
+    запросов.
+
+    Args:
+        user_id: ID пользователя из таблицы ``users``.
+
+    Example::
+
+        configure_database(host=..., user="SYSDBA", password="masterkey")
+        set_session_user(1)   # user_id=1 (SYSDBA) в StOm1.fdb
+    """
+    global _session_user_id
+    _session_user_id = user_id
 
 
 @dataclass(frozen=True)
@@ -266,6 +295,19 @@ def session_scope() -> Iterator[Session]:
     get_engine()
     session: Session = SessionLocal()
     try:
+        if _session_user_id is not None:
+            # AutoDealer triggers resolve the current user via USER_CONNECTION:
+            #   SELECT USER_ID FROM USER_CONNECTION
+            #   WHERE USER_CONNECTION_ID = CURRENT_CONNECTION
+            # Register this connection so triggers can find the user.
+            session.execute(
+                text(
+                    "UPDATE OR INSERT INTO user_connection"
+                    " (user_connection_id, user_id)"
+                    f" VALUES (CURRENT_CONNECTION, {_session_user_id})"
+                    " MATCHING (user_connection_id)"
+                )
+            )
         yield session
         session.commit()
     except Exception:
@@ -307,4 +349,5 @@ __all__ = (
     "configure_engine",
     "session_scope",
     "get_session",
+    "set_session_user",
 )

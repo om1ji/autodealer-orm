@@ -1,24 +1,38 @@
 [project]
 name = "autodealer"
-version = "0.0.1"
-description = "Python library-wrapper for AutoDealer system"
+version = "0.1.0"
+description = "Django-like ORM wrapper for Firebird AutoDealer database"
 authors = [{ name = "Amal Khasanbaev" }]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
-    "fdb>=2.0.0",
+    "sqlalchemy>=2.0",
+    "sqlalchemy-firebird>=2.1",
+    "firebird-driver>=2.0",
+    "python-dotenv>=1.0",
 ]
+
+[project.optional-dependencies]
+docs = [
+    "sphinx>=8.0",
+    "sphinx-rtd-theme",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock",
+]
+
+[project.urls]
+Homepage = "https://github.com/om1ji/autodealer-wrapper"
+Repository = "https://github.com/om1ji/autodealer-wrapper"
+Issues = "https://github.com/om1ji/autodealer-wrapper/issues"
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[project.urls]
-Homepage = "https://github.com/om1ji/autodealer"
-Repository = "https://github.com/om1ji/autodealer"
-Issues = "https://github.com/om1ji/autodealer/issues"
-
 [tool.setuptools.packages.find]
-where = ["autodealer"]
+where = ["."]
+include = ["autodealer*"]
 exclude = ["tests*"]
