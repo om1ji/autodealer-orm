@@ -478,6 +478,21 @@ for item in order.items:
 
 ---
 
+## Документация
+
+Документация собирается через [Sphinx](https://www.sphinx-doc.org/) в папку `docs/`.
+
+```bash
+source venv/bin/activate
+venv/bin/sphinx-build source docs
+```
+
+После сборки открыть `docs/index.html` в браузере.
+
+Исходники документации — в `source/` (`.rst`-файлы и `conf.py`).
+
+---
+
 ## Генерация моделей
 
 Модели генерируются автоматически из схемы живой БД:

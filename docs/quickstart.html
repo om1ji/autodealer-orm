@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+
+<html lang="ru" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Быстрый старт &#8212; документация autodealer 0.0.1</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="_static/basic.css?v=b08954a9" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=27fed22d" />
+    <script src="_static/documentation_options.js?v=ba58aea8"></script>
+    <script src="_static/doctools.js?v=9bcbadda"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/translations.js?v=cd1d70c9"></script>
+    <link rel="index" title="Алфавитный указатель" href="genindex.html" />
+    <link rel="search" title="Поиск" href="search.html" />
+    <link rel="next" title="QuerySet API" href="api/queryset.html" />
+    <link rel="prev" title="autodealer" href="index.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="id1">
+<h1>Быстрый старт<a class="headerlink" href="#id1" title="Ссылка на этот заголовок">¶</a></h1>
+<section id="id2">
+<h2>Установка<a class="headerlink" href="#id2" title="Ссылка на этот заголовок">¶</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+</pre></div>
+</div>
+<p>На macOS также нужен клиент Firebird:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>brew<span class="w"> </span>install<span class="w"> </span>firebird
+</pre></div>
+</div>
+</section>
+<section id="id3">
+<h2>Настройка подключения<a class="headerlink" href="#id3" title="Ссылка на этот заголовок">¶</a></h2>
+<p>Через <code class="docutils literal notranslate"><span class="pre">.env</span></code> в корне проекта:</p>
+<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="na">DB_HOST</span><span class="o">=</span><span class="s">192.168.88.64</span>
+<span class="na">DB_PORT</span><span class="o">=</span><span class="s">3050</span>
+<span class="na">DB_DATABASE</span><span class="o">=</span><span class="s">C:\Program Files (x86)\AutoDealer\AutoDealer\Database\StOm1.fdb</span>
+<span class="na">DB_USER</span><span class="o">=</span><span class="s">SYSDBA</span>
+<span class="na">DB_PASSWORD</span><span class="o">=</span><span class="s">masterkey</span>
+<span class="na">DB_CHARSET</span><span class="o">=</span><span class="s">UTF8</span>
+</pre></div>
+</div>
+<p>Или явно в коде (вызов <strong>до</strong> импорта моделей):</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.connection</span><span class="w"> </span><span class="kn">import</span> <span class="n">configure_database</span>
+
+<span class="n">configure_database</span><span class="p">(</span>
+    <span class="n">host</span><span class="o">=</span><span class="s2">&quot;192.168.88.64&quot;</span><span class="p">,</span>
+    <span class="n">port</span><span class="o">=</span><span class="mi">3050</span><span class="p">,</span>
+    <span class="n">database</span><span class="o">=</span><span class="sa">r</span><span class="s2">&quot;C:\path\to\AutoDealer.fdb&quot;</span><span class="p">,</span>
+    <span class="n">user</span><span class="o">=</span><span class="s2">&quot;SYSDBA&quot;</span><span class="p">,</span>
+    <span class="n">password</span><span class="o">=</span><span class="s2">&quot;masterkey&quot;</span><span class="p">,</span>
+    <span class="n">charset</span><span class="o">=</span><span class="s2">&quot;UTF8&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="id4">
+<h2>Использование моделей<a class="headerlink" href="#id4" title="Ссылка на этот заголовок">¶</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.domain.bank</span><span class="w"> </span><span class="kn">import</span> <span class="n">Bank</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.domain.users</span><span class="w"> </span><span class="kn">import</span> <span class="n">Users</span>
+
+<span class="c1"># Все записи</span>
+<span class="n">banks</span> <span class="o">=</span> <span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+<span class="c1"># Фильтрация</span>
+<span class="n">active</span> <span class="o">=</span> <span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">hidden</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s1">&#39;name&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+<span class="c1"># Один объект</span>
+<span class="n">bank</span> <span class="o">=</span> <span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">bank_id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">bank</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">bank</span><span class="o">.</span><span class="n">bik</span><span class="p">)</span>
+
+<span class="c1"># Проверка существования</span>
+<span class="k">if</span> <span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">name__icontains</span><span class="o">=</span><span class="s1">&#39;сбер&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Сбербанк найден&quot;</span><span class="p">)</span>
+
+<span class="c1"># Список словарей</span>
+<span class="n">rows</span> <span class="o">=</span> <span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">hidden</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">values</span><span class="p">(</span><span class="s1">&#39;bank_id&#39;</span><span class="p">,</span> <span class="s1">&#39;name&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h2>Запись данных<a class="headerlink" href="#id5" title="Ссылка на этот заголовок">¶</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Создание</span>
+<span class="n">bank</span> <span class="o">=</span> <span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Тинькофф&quot;</span><span class="p">,</span> <span class="n">bik</span><span class="o">=</span><span class="s2">&quot;044525974&quot;</span><span class="p">,</span> <span class="n">hidden</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1"># Массовое обновление</span>
+<span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">hidden</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">hidden</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1"># Удаление</span>
+<span class="n">Bank</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">hidden</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="low-level">
+<h2>Сложные запросы (low-level)<a class="headerlink" href="#low-level" title="Ссылка на этот заголовок">¶</a></h2>
+<p>Для многотабличных запросов или сложных условий используйте <code class="docutils literal notranslate"><span class="pre">session_scope</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="n">select</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.connection</span><span class="w"> </span><span class="kn">import</span> <span class="n">session_scope</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.domain.bank</span><span class="w"> </span><span class="kn">import</span> <span class="n">Bank</span>
+
+<span class="k">with</span> <span class="n">session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+        <span class="n">select</span><span class="p">(</span><span class="n">Bank</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">Bank</span><span class="o">.</span><span class="n">hidden</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="n">Bank</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">scalars</span><span class="p">()</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="id6">
+<h2>Генерация моделей<a class="headerlink" href="#id6" title="Ссылка на этот заголовок">¶</a></h2>
+<p>При изменении схемы БД — перегенерировать модели:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>autodealer/tools/generate_models.py
+</pre></div>
+</div>
+<p>Скрипт перезаписывает все файлы в <code class="docutils literal notranslate"><span class="pre">autodealer/domain/</span></code>.</p>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">autodealer</a></h1>
+
+
+
+<p class="blurb">Python ORM-обёртка для базы данных АвтоДилер (Firebird)</p>
+
+
+
+
+<p>
+<iframe src="https://ghbtns.com/github-btn.html?user=om1ji&repo=autodealer-wrapper&type=watch&count=true&size=large&v=2"
+  allowtransparency="true" frameborder="0" scrolling="0" width="200px" height="35px"></iframe>
+</p>
+
+
+
+
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Искать" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script><h3>Навигация</h3>
+<p class="caption" role="heading"><span class="caption-text">Содержание</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Быстрый старт</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id2">Установка</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">Настройка подключения</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">Использование моделей</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id5">Запись данных</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#low-level">Сложные запросы (low-level)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id6">Генерация моделей</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api/queryset.html">QuerySet API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/connection.html">Подключение и сессии</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="index.html" title="предыдущая глава">autodealer</a></li>
+      <li>Next: <a href="api/queryset.html" title="следующая глава">QuerySet API</a></li>
+  </ul></li>
+</ul>
+</div>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2025, Om1ji.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 8.2.3</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 1.0.0</a>
+      
+      |
+      <a href="_sources/quickstart.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

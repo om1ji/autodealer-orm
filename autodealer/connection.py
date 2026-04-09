@@ -27,6 +27,31 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
 from sqlalchemy.orm import DeclarativeBase, Session, scoped_session, sessionmaker
 
+
+def _patch_firebird_render_bind_cast() -> None:
+    """Патч бага sqlalchemy-firebird: visit_VARCHAR получает неверные аргументы.
+
+    ``FBCompiler.render_bind_cast`` пытается рендерить явный CAST для каждого
+    bind-параметра строкового типа, но при этом передаёт аргументы в
+    ``_render_string_type`` в неправильном порядке (сигнатура метода изменилась
+    в sqlalchemy-firebird 2.1, но вызывающий код не обновился).
+
+    Решение: отключить рендеринг CAST — Firebird выполняет неявное
+    приведение типов самостоятельно, явный CAST не нужен.
+    """
+    try:
+        from sqlalchemy_firebird.base import FBCompiler
+
+        def render_bind_cast(self, type_, dbapi_type, cast_from):  # noqa: ARG001
+            return cast_from
+
+        FBCompiler.render_bind_cast = render_bind_cast  # type: ignore[method-assign]
+    except (ImportError, AttributeError):
+        pass
+
+
+_patch_firebird_render_bind_cast()
+
 DIRECT_URL_ENV_KEYS: Sequence[str] = (
     "DATABASE_URL",
     "SQLALCHEMY_DATABASE_URL",
@@ -102,9 +127,7 @@ class DatabaseConfig:
             RuntimeError: Если не заданы обязательные переменные.
         """
         database = (
-            os.getenv("DB_DATABASE")
-            or os.getenv("DB_PATH")
-            or os.getenv("DB_NAME")
+            os.getenv("DB_DATABASE") or os.getenv("DB_PATH") or os.getenv("DB_NAME")
         )
         dsn = os.getenv("DB_DSN")
         if not database and not dsn:
@@ -195,9 +218,7 @@ def create_db_engine(url: str | URL | None = None) -> Engine:
     )
 
 
-SessionLocal = scoped_session(
-    sessionmaker(autoflush=False, autocommit=False)
-)
+SessionLocal = scoped_session(sessionmaker(autoflush=False, autocommit=False))
 
 
 def _set_engine(new_engine: Engine) -> Engine:

@@ -5,7 +5,7 @@ description = "Django-like ORM wrapper for Firebird AutoDealer database"
 authors = [{ name = "Amal Khasanbaev" }]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "sqlalchemy>=2.0",
     "sqlalchemy-firebird>=2.1",

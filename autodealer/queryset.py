@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, overload
 
 from sqlalchemy import (
     delete,
@@ -441,6 +441,12 @@ class Manager:
 
     def __set_name__(self, owner: type, name: str) -> None:
         self._name = name
+
+    @overload
+    def __get__(self, obj: None, objtype: type[T]) -> QuerySet[T]: ...
+
+    @overload
+    def __get__(self, obj: object, objtype: type[T] | None) -> QuerySet[T]: ...
 
     def __get__(self, obj: object, objtype: type | None = None) -> QuerySet:
         if obj is not None:

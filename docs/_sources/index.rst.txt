@@ -16,6 +16,4 @@ Python ORM-обёртка над базой данных системы **Авт
    quickstart
    api/queryset
    api/connection
-   api/services
-   api/actions
    api/rocketwash

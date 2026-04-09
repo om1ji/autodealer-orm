@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+
+<html lang="ru" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>autodealer.queryset &#8212; документация autodealer 0.0.1</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="../../_static/basic.css?v=b08954a9" />
+    <link rel="stylesheet" type="text/css" href="../../_static/alabaster.css?v=27fed22d" />
+    <script src="../../_static/documentation_options.js?v=ba58aea8"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/translations.js?v=cd1d70c9"></script>
+    <link rel="index" title="Алфавитный указатель" href="../../genindex.html" />
+    <link rel="search" title="Поиск" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Исходный код autodealer.queryset</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Django-подобный QuerySet и Manager для моделей SQLAlchemy 2.0.</span>
+
+<span class="sd">Каждая модель наследует от :class:`~autodealer.connection.Base`, к которому</span>
+<span class="sd">автоматически привязан :class:`Manager`. Доступ через атрибут ``objects``::</span>
+
+<span class="sd">    from autodealer.domain.bank import Bank</span>
+
+<span class="sd">    Bank.objects.filter(hidden=0).order_by(&#39;name&#39;).all()</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Generic</span><span class="p">,</span> <span class="n">TypeVar</span><span class="p">,</span> <span class="n">overload</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">delete</span><span class="p">,</span>
+    <span class="n">func</span><span class="p">,</span>
+    <span class="n">select</span><span class="p">,</span>
+    <span class="n">type_coerce</span><span class="p">,</span>
+    <span class="n">update</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">NullType</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy.orm</span><span class="w"> </span><span class="kn">import</span> <span class="n">sessionmaker</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_session_scope</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.connection</span><span class="w"> </span><span class="kn">import</span> <span class="n">session_scope</span>
+
+    <span class="k">return</span> <span class="n">session_scope</span><span class="p">()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_get_engine</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.connection</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_engine</span>
+
+    <span class="k">return</span> <span class="n">get_engine</span><span class="p">()</span>
+
+
+<span class="n">T</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;T&quot;</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="DoesNotExist">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.DoesNotExist">[документация]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">DoesNotExist</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Объект не найден. Выбрасывается из :meth:`QuerySet.get`.&quot;&quot;&quot;</span></div>
+
+
+
+<div class="viewcode-block" id="MultipleObjectsReturned">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.MultipleObjectsReturned">[документация]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">MultipleObjectsReturned</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Найдено более одного объекта. Выбрасывается из :meth:`QuerySet.get`.&quot;&quot;&quot;</span></div>
+
+
+
+<div class="viewcode-block" id="QuerySet">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet">[документация]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">QuerySet</span><span class="p">(</span><span class="n">Generic</span><span class="p">[</span><span class="n">T</span><span class="p">]):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Цепочечный построитель запросов, аналогичный Django QuerySet.</span>
+
+<span class="sd">    Не выполняет SQL до вызова терминального метода</span>
+<span class="sd">    (:meth:`all`, :meth:`first`, :meth:`last`, :meth:`count`, :meth:`get`,</span>
+<span class="sd">    :meth:`exists`, :meth:`values`).</span>
+
+<span class="sd">    Не создавать напрямую — использовать ``Model.objects``.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        # Все активные банки, отсортированные по имени</span>
+<span class="sd">        banks = Bank.objects.filter(hidden=0).order_by(&#39;name&#39;).all()</span>
+
+<span class="sd">        # Один объект или исключение</span>
+<span class="sd">        bank = Bank.objects.get(bank_id=1)</span>
+
+<span class="sd">        # Проверка существования</span>
+<span class="sd">        if Bank.objects.filter(name__icontains=&#39;сбер&#39;).exists():</span>
+<span class="sd">            ...</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">T</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_model</span> <span class="o">=</span> <span class="n">model</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_wheres</span><span class="p">:</span> <span class="nb">list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_order_cols</span><span class="p">:</span> <span class="nb">list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_limit_val</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_offset_val</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="c1"># ------------------------------------------------------------------</span>
+    <span class="c1"># Internal helpers</span>
+    <span class="c1"># ------------------------------------------------------------------</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_clone</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;QuerySet[T]&quot;</span><span class="p">:</span>
+        <span class="n">qs</span><span class="p">:</span> <span class="n">QuerySet</span><span class="p">[</span><span class="n">T</span><span class="p">]</span> <span class="o">=</span> <span class="n">QuerySet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">)</span>
+        <span class="n">qs</span><span class="o">.</span><span class="n">_wheres</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_wheres</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">qs</span><span class="o">.</span><span class="n">_order_cols</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_order_cols</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">qs</span><span class="o">.</span><span class="n">_limit_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_limit_val</span>
+        <span class="n">qs</span><span class="o">.</span><span class="n">_offset_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_offset_val</span>
+        <span class="k">return</span> <span class="n">qs</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_resolve_field</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Support double-underscore lookups: name__contains, age__gte, etc.&quot;&quot;&quot;</span>
+        <span class="c1"># literal() is required for LIKE patterns to avoid a sqlalchemy-firebird</span>
+        <span class="c1"># bug where the Firebird type compiler receives the column length as `name`</span>
+        <span class="c1"># instead of the type name, causing TypeError during SQL compilation.</span>
+        <span class="n">lookups</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;exact&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span> <span class="o">==</span> <span class="n">v</span><span class="p">,</span>
+            <span class="c1"># type_coerce(..., NullType()) prevents sqlalchemy-firebird from</span>
+            <span class="c1"># calling visit_VARCHAR on the bind parameter, which has a bug</span>
+            <span class="c1"># where _render_string_type receives swapped positional arguments.</span>
+            <span class="s2">&quot;iexact&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span><span class="o">.</span><span class="n">ilike</span><span class="p">(</span><span class="n">type_coerce</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">NullType</span><span class="p">())),</span>
+            <span class="s2">&quot;contains&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span><span class="o">.</span><span class="n">like</span><span class="p">(</span><span class="n">type_coerce</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;%</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">%&quot;</span><span class="p">,</span> <span class="n">NullType</span><span class="p">())),</span>
+            <span class="s2">&quot;icontains&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span><span class="o">.</span><span class="n">ilike</span><span class="p">(</span><span class="n">type_coerce</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;%</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">%&quot;</span><span class="p">,</span> <span class="n">NullType</span><span class="p">())),</span>
+            <span class="s2">&quot;startswith&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span><span class="o">.</span><span class="n">like</span><span class="p">(</span><span class="n">type_coerce</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">%&quot;</span><span class="p">,</span> <span class="n">NullType</span><span class="p">())),</span>
+            <span class="s2">&quot;endswith&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span><span class="o">.</span><span class="n">like</span><span class="p">(</span><span class="n">type_coerce</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;%</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">NullType</span><span class="p">())),</span>
+            <span class="s2">&quot;gt&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span> <span class="o">&gt;</span> <span class="n">v</span><span class="p">,</span>
+            <span class="s2">&quot;gte&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span> <span class="o">&gt;=</span> <span class="n">v</span><span class="p">,</span>
+            <span class="s2">&quot;lt&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span> <span class="o">&lt;</span> <span class="n">v</span><span class="p">,</span>
+            <span class="s2">&quot;lte&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span> <span class="o">&lt;=</span> <span class="n">v</span><span class="p">,</span>
+            <span class="s2">&quot;in&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span><span class="o">.</span><span class="n">in_</span><span class="p">(</span><span class="n">v</span><span class="p">),</span>
+            <span class="s2">&quot;isnull&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">col</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">col</span><span class="o">.</span><span class="n">is_</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span> <span class="k">if</span> <span class="n">v</span> <span class="k">else</span> <span class="n">col</span><span class="o">.</span><span class="n">isnot</span><span class="p">(</span><span class="kc">None</span><span class="p">),</span>
+        <span class="p">}</span>
+        <span class="n">parts</span> <span class="o">=</span> <span class="n">key</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">&quot;__&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">parts</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">parts</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="n">lookups</span><span class="p">:</span>
+            <span class="n">field_name</span><span class="p">,</span> <span class="n">lookup</span> <span class="o">=</span> <span class="n">parts</span>
+            <span class="n">col</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">,</span> <span class="n">field_name</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">lookups</span><span class="p">[</span><span class="n">lookup</span><span class="p">],</span> <span class="n">col</span>
+        <span class="n">col</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">lookups</span><span class="p">[</span><span class="s2">&quot;exact&quot;</span><span class="p">],</span> <span class="n">col</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_coerce_strings</span><span class="p">(</span><span class="n">kwargs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Wrap str values with type_coerce(..., NullType()) to avoid the</span>
+<span class="sd">        sqlalchemy-firebird bug where _render_string_type receives swapped</span>
+<span class="sd">        arguments during INSERT/UPDATE compilation.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="n">k</span><span class="p">:</span> <span class="n">type_coerce</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">NullType</span><span class="p">())</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="k">else</span> <span class="n">v</span>
+            <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_build_stmt</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">stmt</span> <span class="o">=</span> <span class="n">select</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_wheres</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">w</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_order_cols</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">_order_cols</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_limit_val</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_limit_val</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_offset_val</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">offset</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_offset_val</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">stmt</span>
+
+    <span class="c1"># ------------------------------------------------------------------</span>
+    <span class="c1"># Filtering / ordering</span>
+    <span class="c1"># ------------------------------------------------------------------</span>
+
+<div class="viewcode-block" id="QuerySet.filter">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.filter">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">filter</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;QuerySet[T]&quot;</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Добавить условия фильтрации (WHERE).</span>
+
+<span class="sd">        Поддерживаются лукапы через ``__``:</span>
+<span class="sd">        ``exact``, ``iexact``, ``contains``, ``icontains``,</span>
+<span class="sd">        ``startswith``, ``endswith``, ``gt``, ``gte``, ``lt``, ``lte``,</span>
+<span class="sd">        ``in``, ``isnull``.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            **kwargs: Условия вида ``field=value`` или ``field__lookup=value``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Новый :class:`QuerySet` с добавленными условиями.</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            Bank.objects.filter(hidden=0, name__icontains=&#39;сбер&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">qs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clone</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">op</span><span class="p">,</span> <span class="n">col</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resolve_field</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+            <span class="n">qs</span><span class="o">.</span><span class="n">_wheres</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">op</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">value</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">qs</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.exclude">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.exclude">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">exclude</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;QuerySet[T]&quot;</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Исключить записи, соответствующие условиям (WHERE NOT).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            **kwargs: Условия вида ``field=value`` или ``field__lookup=value``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Новый :class:`QuerySet`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">qs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clone</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">op</span><span class="p">,</span> <span class="n">col</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resolve_field</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+            <span class="n">qs</span><span class="o">.</span><span class="n">_wheres</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="o">~</span><span class="n">op</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">value</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">qs</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.order_by">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.order_by">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">order_by</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">fields</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;QuerySet[T]&quot;</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Задать сортировку.</span>
+
+<span class="sd">        Префикс ``-`` означает сортировку по убыванию.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            *fields: Имена полей. ``&#39;-name&#39;`` — DESC, ``&#39;name&#39;`` — ASC.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Новый :class:`QuerySet`.</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            Bank.objects.order_by(&#39;-bank_id&#39;, &#39;name&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">qs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clone</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">fields</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">field</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;-&quot;</span><span class="p">):</span>
+                <span class="n">col</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">,</span> <span class="n">field</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+                <span class="n">qs</span><span class="o">.</span><span class="n">_order_cols</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">col</span><span class="o">.</span><span class="n">desc</span><span class="p">())</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">col</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">,</span> <span class="n">field</span><span class="p">)</span>
+                <span class="n">qs</span><span class="o">.</span><span class="n">_order_cols</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">col</span><span class="o">.</span><span class="n">asc</span><span class="p">())</span>
+        <span class="k">return</span> <span class="n">qs</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.limit">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.limit">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">limit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;QuerySet[T]&quot;</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Ограничить количество результатов (LIMIT).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            n: Максимальное число записей.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Новый :class:`QuerySet`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">qs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clone</span><span class="p">()</span>
+        <span class="n">qs</span><span class="o">.</span><span class="n">_limit_val</span> <span class="o">=</span> <span class="n">n</span>
+        <span class="k">return</span> <span class="n">qs</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.offset">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.offset">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">offset</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;QuerySet[T]&quot;</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Пропустить первые *n* записей (OFFSET).</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            n: Число пропускаемых записей.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Новый :class:`QuerySet`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">qs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clone</span><span class="p">()</span>
+        <span class="n">qs</span><span class="o">.</span><span class="n">_offset_val</span> <span class="o">=</span> <span class="n">n</span>
+        <span class="k">return</span> <span class="n">qs</span></div>
+
+
+    <span class="c1"># ------------------------------------------------------------------</span>
+    <span class="c1"># Evaluation</span>
+    <span class="c1"># ------------------------------------------------------------------</span>
+
+<div class="viewcode-block" id="QuerySet.all">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.all">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">all</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Выполнить запрос и вернуть все результаты.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Список экземпляров модели (detached от сессии).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">_session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_build_stmt</span><span class="p">())</span><span class="o">.</span><span class="n">scalars</span><span class="p">()</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">expunge_all</span><span class="p">()</span>
+            <span class="k">return</span> <span class="n">result</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.first">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.first">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">first</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Вернуть первую запись или ``None``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Экземпляр модели или ``None``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">_session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_stmt</span><span class="p">()</span><span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">obj</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">stmt</span><span class="p">)</span><span class="o">.</span><span class="n">scalars</span><span class="p">()</span><span class="o">.</span><span class="n">first</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">obj</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">session</span><span class="o">.</span><span class="n">expunge</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">obj</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.last">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.last">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">last</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Вернуть последнюю запись или ``None``.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Экземпляр модели или ``None``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">results</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">results</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">results</span> <span class="k">else</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.get">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.get">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Вернуть ровно одну запись.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            **kwargs: Дополнительные условия (как в :meth:`filter`).</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Экземпляр модели.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            DoesNotExist: Запись не найдена.</span>
+<span class="sd">            MultipleObjectsReturned: Найдено более одной записи.</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            bank = Bank.objects.get(bank_id=1)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">qs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="k">if</span> <span class="n">kwargs</span> <span class="k">else</span> <span class="bp">self</span>
+        <span class="k">with</span> <span class="n">_session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+            <span class="n">results</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">qs</span><span class="o">.</span><span class="n">_build_stmt</span><span class="p">())</span><span class="o">.</span><span class="n">scalars</span><span class="p">()</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">DoesNotExist</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> matching query does not exist.&quot;</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">MultipleObjectsReturned</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;get() returned more than one </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="p">)</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">expunge</span><span class="p">(</span><span class="n">results</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">return</span> <span class="n">results</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.count">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.count">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">count</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Вернуть количество записей (SELECT COUNT(*)).</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Целое число.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">stmt</span> <span class="o">=</span> <span class="n">select</span><span class="p">(</span><span class="n">func</span><span class="o">.</span><span class="n">count</span><span class="p">())</span><span class="o">.</span><span class="n">select_from</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_wheres</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">w</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">_session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">stmt</span><span class="p">)</span><span class="o">.</span><span class="n">scalar</span><span class="p">()</span> <span class="ow">or</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.exists">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.exists">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">exists</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Проверить, есть ли хотя бы одна запись.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            ``True`` если записи существуют.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">count</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.values">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.values">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">values</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">fields</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Вернуть список словарей вместо экземпляров модели.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            *fields: Имена полей. Если не переданы — все колонки.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Список ``dict``.</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            Bank.objects.filter(hidden=0).values(&#39;bank_id&#39;, &#39;name&#39;)</span>
+<span class="sd">            # [{&#39;bank_id&#39;: 1, &#39;name&#39;: &#39;Сбербанк&#39;}, ...]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">cols</span> <span class="o">=</span> <span class="n">fields</span> <span class="ow">or</span> <span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="n">key</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="o">.</span><span class="n">__table__</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
+        <span class="k">with</span> <span class="n">_session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+            <span class="n">objs</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_build_stmt</span><span class="p">())</span><span class="o">.</span><span class="n">scalars</span><span class="p">()</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+            <span class="k">return</span> <span class="p">[{</span><span class="n">f</span><span class="p">:</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">cols</span><span class="p">}</span> <span class="k">for</span> <span class="n">obj</span> <span class="ow">in</span> <span class="n">objs</span><span class="p">]</span></div>
+
+
+    <span class="c1"># ------------------------------------------------------------------</span>
+    <span class="c1"># Write operations</span>
+    <span class="c1"># ------------------------------------------------------------------</span>
+
+<div class="viewcode-block" id="QuerySet.create">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.create">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Создать и сохранить новую запись.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            **kwargs: Значения полей новой записи.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Сохранённый экземпляр модели (атрибуты доступны после коммита).</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            bank = Bank.objects.create(name=&#39;Тинькофф&#39;, bik=&#39;044525974&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="n">insert</span> <span class="k">as</span> <span class="n">_insert</span>
+
+        <span class="n">Session</span> <span class="o">=</span> <span class="n">sessionmaker</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="n">_get_engine</span><span class="p">(),</span> <span class="n">expire_on_commit</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">session</span> <span class="o">=</span> <span class="n">Session</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">_insert</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">)</span><span class="o">.</span><span class="n">values</span><span class="p">(</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_coerce_strings</span><span class="p">(</span><span class="n">kwargs</span><span class="p">))</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">stmt</span><span class="p">)</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
+            <span class="c1"># Build detached instance; populate trigger-generated PK from RETURNING</span>
+            <span class="n">obj</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+            <span class="n">pk_cols</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="o">.</span><span class="n">__mapper__</span><span class="o">.</span><span class="n">primary_key</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">pk_cols</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">inserted_primary_key</span> <span class="ow">or</span> <span class="p">[]):</span>
+                <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">col</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">val</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="nb">setattr</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">col</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">val</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">obj</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">rollback</span><span class="p">()</span>
+            <span class="k">raise</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.update">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.update">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Массово обновить записи, соответствующие фильтрам.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            **kwargs: Поля и новые значения.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Количество изменённых строк.</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            Bank.objects.filter(hidden=1).update(hidden=0)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">stmt</span> <span class="o">=</span> <span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_wheres</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">w</span><span class="p">)</span>
+        <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">values</span><span class="p">(</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_coerce_strings</span><span class="p">(</span><span class="n">kwargs</span><span class="p">))</span>
+        <span class="k">with</span> <span class="n">_session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">stmt</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">result</span><span class="o">.</span><span class="n">rowcount</span></div>
+
+
+<div class="viewcode-block" id="QuerySet.delete">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.QuerySet.delete">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">delete</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Массово удалить записи, соответствующие фильтрам.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Количество удалённых строк.</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            Bank.objects.filter(hidden=1).delete()</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">stmt</span> <span class="o">=</span> <span class="n">delete</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_wheres</span><span class="p">:</span>
+            <span class="n">stmt</span> <span class="o">=</span> <span class="n">stmt</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">w</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">_session_scope</span><span class="p">()</span> <span class="k">as</span> <span class="n">session</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">stmt</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">result</span><span class="o">.</span><span class="n">rowcount</span></div>
+
+
+    <span class="c1"># ------------------------------------------------------------------</span>
+    <span class="c1"># Python protocol</span>
+    <span class="c1"># ------------------------------------------------------------------</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">iter</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">all</span><span class="p">())</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">count</span><span class="p">()</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;&lt;QuerySet model=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_model</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&gt;&quot;</span></div>
+
+
+
+<div class="viewcode-block" id="Manager">
+<a class="viewcode-back" href="../../api/queryset.html#autodealer.queryset.Manager">[документация]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">Manager</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Descriptor that provides Django-like `Model.objects` access.</span>
+
+<span class="sd">    Attach to a class with::</span>
+
+<span class="sd">        class MyModel(Base):</span>
+<span class="sd">            objects = Manager()</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__set_name__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">owner</span><span class="p">:</span> <span class="nb">type</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_name</span> <span class="o">=</span> <span class="n">name</span>
+
+    <span class="nd">@overload</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="n">objtype</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">T</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">QuerySet</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span> <span class="o">...</span>
+
+    <span class="nd">@overload</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">objtype</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">T</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">QuerySet</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span> <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">objtype</span><span class="p">:</span> <span class="nb">type</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">QuerySet</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">obj</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="s2">&quot;Manager is not accessible via model instances.&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">QuerySet</span><span class="p">(</span><span class="n">objtype</span><span class="p">)</span></div>
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">autodealer</a></h1>
+
+
+
+<p class="blurb">Python ORM-обёртка для базы данных АвтоДилер (Firebird)</p>
+
+
+
+
+<p>
+<iframe src="https://ghbtns.com/github-btn.html?user=om1ji&repo=autodealer-wrapper&type=watch&count=true&size=large&v=2"
+  allowtransparency="true" frameborder="0" scrolling="0" width="200px" height="35px"></iframe>
+</p>
+
+
+
+
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Искать" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script><h3>Навигация</h3>
+<p class="caption" role="heading"><span class="caption-text">Содержание</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Быстрый старт</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/queryset.html">QuerySet API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/connection.html">Подключение и сессии</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Код модуля</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2025, Om1ji.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 8.2.3</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 1.0.0</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

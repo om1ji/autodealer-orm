@@ -11,6 +11,8 @@ from autodealer.connection import Base
 
 
 class ServiceComplexWorkItem(Base):
+    "Many-to-many relationship between Tree and Complex_Work objects"
+    
     __tablename__ = "service_complex_work_item"
 
     service_complex_work_item_id: Mapped[int] = mapped_column(Integer, primary_key=True)

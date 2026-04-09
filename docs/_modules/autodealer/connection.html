@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+
+<html lang="ru" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>autodealer.connection &#8212; документация autodealer 0.0.1</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="../../_static/basic.css?v=b08954a9" />
+    <link rel="stylesheet" type="text/css" href="../../_static/alabaster.css?v=27fed22d" />
+    <script src="../../_static/documentation_options.js?v=ba58aea8"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/translations.js?v=cd1d70c9"></script>
+    <link rel="index" title="Алфавитный указатель" href="../../genindex.html" />
+    <link rel="search" title="Поиск" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Исходный код autodealer.connection</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Подключение к базе данных Firebird и управление сессиями SQLAlchemy.</span>
+
+<span class="sd">Типичный сценарий использования::</span>
+
+<span class="sd">    from autodealer.connection import configure_database, session_scope</span>
+
+<span class="sd">    configure_database(</span>
+<span class="sd">        host=&quot;192.168.88.64&quot;,</span>
+<span class="sd">        port=3050,</span>
+<span class="sd">        database=r&quot;C:\\path\\to\\AutoDealer.fdb&quot;,</span>
+<span class="sd">        user=&quot;SYSDBA&quot;,</span>
+<span class="sd">        password=&quot;masterkey&quot;,</span>
+<span class="sd">    )</span>
+
+<span class="sd">    with session_scope() as session:</span>
+<span class="sd">        # работа с сессией</span>
+<span class="sd">        ...</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">contextlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">contextmanager</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Generator</span><span class="p">,</span> <span class="n">Iterator</span><span class="p">,</span> <span class="n">Sequence</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_engine</span><span class="p">,</span> <span class="n">text</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">Engine</span><span class="p">,</span> <span class="n">URL</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy.orm</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeclarativeBase</span><span class="p">,</span> <span class="n">Session</span><span class="p">,</span> <span class="n">scoped_session</span><span class="p">,</span> <span class="n">sessionmaker</span>
+
+<span class="n">DIRECT_URL_ENV_KEYS</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;DATABASE_URL&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;SQLALCHEMY_DATABASE_URL&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;DB_URL&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">_config_override</span><span class="p">:</span> <span class="n">DatabaseConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="n">engine</span><span class="p">:</span> <span class="n">Engine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="n">_session_user_id</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+<div class="viewcode-block" id="set_session_user">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.set_session_user">[документация]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">set_session_user</span><span class="p">(</span><span class="n">user_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Установить ID пользователя для Firebird-триггеров.</span>
+
+<span class="sd">    Триггеры AutoDealer (например, ``ORGANIZATION_AU``) определяют автора</span>
+<span class="sd">    изменения через таблицу ``USER_CONNECTION``:</span>
+
+<span class="sd">    .. code-block:: sql</span>
+
+<span class="sd">        SELECT USER_ID FROM USER_CONNECTION</span>
+<span class="sd">        WHERE USER_CONNECTION_ID = CURRENT_CONNECTION</span>
+<span class="sd">        INTO :CONNECTED_USER_ID;</span>
+
+<span class="sd">    После вызова этой функции каждый ``session_scope()`` будет автоматически</span>
+<span class="sd">    регистрировать текущее соединение в ``USER_CONNECTION`` перед выполнением</span>
+<span class="sd">    запросов.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        user_id: ID пользователя из таблицы ``users``.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        configure_database(host=..., user=&quot;SYSDBA&quot;, password=&quot;masterkey&quot;)</span>
+<span class="sd">        set_session_user(1)   # user_id=1 (SYSDBA) в StOm1.fdb</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">global</span> <span class="n">_session_user_id</span>
+    <span class="n">_session_user_id</span> <span class="o">=</span> <span class="n">user_id</span></div>
+
+
+
+<div class="viewcode-block" id="DatabaseConfig">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.DatabaseConfig">[документация]</a>
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">DatabaseConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Параметры подключения к базе данных Firebird.</span>
+
+<span class="sd">    Используется внутри :func:`configure_database` и :func:`get_connection_url`.</span>
+<span class="sd">    Можно создать вручную или через :meth:`from_env`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        database: Путь к файлу ``.fdb`` на сервере (Windows-путь).</span>
+<span class="sd">        user: Имя пользователя Firebird.</span>
+<span class="sd">        password: Пароль.</span>
+<span class="sd">        host: Хост сервера. По умолчанию из ``DB_HOST`` или ``&quot;localhost&quot;``.</span>
+<span class="sd">        port: Порт. По умолчанию из ``DB_PORT`` или ``3050``.</span>
+<span class="sd">        charset: Кодировка. По умолчанию из ``DB_CHARSET`` или ``&quot;UTF8&quot;``.</span>
+<span class="sd">        dsn: Полный DSN (альтернатива отдельным параметрам).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">database</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">user</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">password</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">host</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_HOST&quot;</span><span class="p">)</span>
+    <span class="n">port</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_PORT&quot;</span><span class="p">))</span> <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_PORT&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="n">charset</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_CHARSET&quot;</span><span class="p">,</span> <span class="s2">&quot;UTF8&quot;</span><span class="p">)</span>
+    <span class="n">dsn</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_DSN&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DatabaseConfig.from_env">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.DatabaseConfig.from_env">[документация]</a>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">from_env</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;DatabaseConfig&quot;</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Создать конфигурацию из переменных окружения.</span>
+
+<span class="sd">        Читает ``DB_DATABASE`` (или ``DB_PATH`` / ``DB_NAME``), ``DB_USER``,</span>
+<span class="sd">        ``DB_PASSWORD``, ``DB_HOST``, ``DB_PORT``, ``DB_CHARSET``, ``DB_DSN``.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            RuntimeError: Если не заданы обязательные переменные.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">database</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_DATABASE&quot;</span><span class="p">)</span>
+            <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_PATH&quot;</span><span class="p">)</span>
+            <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_NAME&quot;</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">dsn</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_DSN&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">database</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">dsn</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="s2">&quot;Database path is missing. Set DB_DATABASE/DB_PATH/DB_NAME &quot;</span>
+                <span class="s2">&quot;or provide DB_DSN/DATABASE_URL/DB_URL for a full SQLAlchemy URL.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">user</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_USER&quot;</span><span class="p">)</span>
+        <span class="n">password</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_PASSWORD&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">user</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">password</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="s2">&quot;Database credentials missing. Set DB_USER and DB_PASSWORD.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">host</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_HOST&quot;</span><span class="p">)</span>
+        <span class="n">port</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_PORT&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">dsn</span><span class="p">:</span>
+            <span class="n">host</span> <span class="o">=</span> <span class="n">host</span> <span class="ow">or</span> <span class="s2">&quot;localhost&quot;</span>
+            <span class="n">port_value</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="k">if</span> <span class="n">port</span> <span class="k">else</span> <span class="mi">3050</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">port_value</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="k">if</span> <span class="n">port</span> <span class="k">else</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span>
+            <span class="n">database</span><span class="o">=</span><span class="n">database</span><span class="p">,</span>
+            <span class="n">user</span><span class="o">=</span><span class="n">user</span><span class="p">,</span>
+            <span class="n">password</span><span class="o">=</span><span class="n">password</span><span class="p">,</span>
+            <span class="n">host</span><span class="o">=</span><span class="n">host</span><span class="p">,</span>
+            <span class="n">port</span><span class="o">=</span><span class="n">port_value</span><span class="p">,</span>
+            <span class="n">dsn</span><span class="o">=</span><span class="n">dsn</span><span class="p">,</span>
+        <span class="p">)</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_database_argument</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">dsn</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">dsn</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">database</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Database path missing.&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">database</span>
+
+<div class="viewcode-block" id="DatabaseConfig.to_url">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.DatabaseConfig.to_url">[документация]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_url</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">URL</span><span class="p">:</span>
+        <span class="n">query</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;charset&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">charset</span><span class="p">}</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">charset</span> <span class="k">else</span> <span class="kc">None</span>
+        <span class="n">kwargs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">user</span><span class="p">,</span>
+            <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">,</span>
+            <span class="s2">&quot;database&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_database_argument</span><span class="p">(),</span>
+            <span class="s2">&quot;query&quot;</span><span class="p">:</span> <span class="n">query</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">dsn</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">host</span><span class="p">:</span>
+                <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;host&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">host</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">port</span><span class="p">:</span>
+                <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;port&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">port</span>
+        <span class="k">return</span> <span class="n">URL</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;firebird+firebird&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+</div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_direct_database_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">DIRECT_URL_ENV_KEYS</span><span class="p">:</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">value</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">value</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+
+<div class="viewcode-block" id="get_connection_url">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.get_connection_url">[документация]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_connection_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">URL</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Вернуть SQLAlchemy URL для подключения к Firebird.</span>
+
+<span class="sd">    Приоритет: явный вызов :func:`configure_database` → переменные окружения</span>
+<span class="sd">    ``DATABASE_URL`` / ``DB_URL`` → ``DatabaseConfig.from_env()``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">_config_override</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_config_override</span><span class="o">.</span><span class="n">to_url</span><span class="p">()</span>
+    <span class="n">url</span> <span class="o">=</span> <span class="n">_direct_database_url</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">url</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">url</span>
+    <span class="k">return</span> <span class="n">DatabaseConfig</span><span class="o">.</span><span class="n">from_env</span><span class="p">()</span><span class="o">.</span><span class="n">to_url</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="create_db_engine">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.create_db_engine">[документация]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">create_db_engine</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">URL</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Engine</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Создать новый SQLAlchemy :class:`~sqlalchemy.engine.Engine` для Firebird.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        url: Готовый URL. Если не передан — используется :func:`get_connection_url`.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Новый экземпляр Engine (не кешируется).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">create_engine</span><span class="p">(</span>
+        <span class="n">url</span> <span class="ow">or</span> <span class="n">get_connection_url</span><span class="p">(),</span>
+        <span class="n">echo</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">future</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<span class="n">SessionLocal</span> <span class="o">=</span> <span class="n">scoped_session</span><span class="p">(</span>
+    <span class="n">sessionmaker</span><span class="p">(</span><span class="n">autoflush</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">autocommit</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_set_engine</span><span class="p">(</span><span class="n">new_engine</span><span class="p">:</span> <span class="n">Engine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Engine</span><span class="p">:</span>
+    <span class="k">global</span> <span class="n">engine</span>
+    <span class="n">engine</span> <span class="o">=</span> <span class="n">new_engine</span>
+    <span class="n">SessionLocal</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span>
+    <span class="n">SessionLocal</span><span class="o">.</span><span class="n">configure</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="n">new_engine</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">new_engine</span>
+
+
+<div class="viewcode-block" id="get_engine">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.get_engine">[документация]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_engine</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">URL</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Engine</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Лениво создать или вернуть кешированный engine.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        url: Если передан — пересоздаёт engine с новым URL.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Текущий активный :class:`~sqlalchemy.engine.Engine`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">url</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_set_engine</span><span class="p">(</span><span class="n">create_db_engine</span><span class="p">(</span><span class="n">url</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">engine</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_set_engine</span><span class="p">(</span><span class="n">create_db_engine</span><span class="p">())</span>
+    <span class="k">return</span> <span class="n">engine</span></div>
+
+
+
+<div class="viewcode-block" id="configure_engine">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.configure_engine">[документация]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">configure_engine</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">URL</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Engine</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Rebuild the SQLAlchemy engine/session factory with new connection details.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">global</span> <span class="n">engine</span>
+    <span class="k">if</span> <span class="n">engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">engine</span><span class="o">.</span><span class="n">dispose</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">_set_engine</span><span class="p">(</span><span class="n">create_db_engine</span><span class="p">(</span><span class="n">url</span><span class="p">))</span></div>
+
+
+
+<div class="viewcode-block" id="configure_database">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.configure_database">[документация]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">configure_database</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="nb">object</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Engine</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Настроить подключение, передав параметры напрямую (без ``.env``).</span>
+
+<span class="sd">    Принимает те же поля, что и :class:`DatabaseConfig`:</span>
+<span class="sd">    ``database``, ``user``, ``password``, ``host``, ``port``, ``charset``, ``dsn``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        **kwargs: Параметры подключения.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Пересозданный :class:`~sqlalchemy.engine.Engine`.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        configure_database(</span>
+<span class="sd">            host=&quot;192.168.88.64&quot;,</span>
+<span class="sd">            port=3050,</span>
+<span class="sd">            database=r&quot;C:\\path\\to\\AutoDealer.fdb&quot;,</span>
+<span class="sd">            user=&quot;SYSDBA&quot;,</span>
+<span class="sd">            password=&quot;masterkey&quot;,</span>
+<span class="sd">            charset=&quot;UTF8&quot;,</span>
+<span class="sd">        )</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">global</span> <span class="n">_config_override</span>
+    <span class="n">_config_override</span> <span class="o">=</span> <span class="n">DatabaseConfig</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">configure_engine</span><span class="p">(</span><span class="n">_config_override</span><span class="o">.</span><span class="n">to_url</span><span class="p">())</span></div>
+
+
+
+<div class="viewcode-block" id="Base">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.Base">[документация]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">Base</span><span class="p">(</span><span class="n">DeclarativeBase</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Declarative base class for ORM models.&quot;&quot;&quot;</span>
+
+    <span class="k">pass</span></div>
+
+
+
+<span class="c1"># Attach Manager after both Base and QuerySet are fully defined to avoid circular imports</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">autodealer.queryset</span><span class="w"> </span><span class="kn">import</span> <span class="n">Manager</span>  <span class="c1"># noqa: E402</span>
+
+<span class="n">Base</span><span class="o">.</span><span class="n">objects</span> <span class="o">=</span> <span class="n">Manager</span><span class="p">()</span>  <span class="c1"># type: ignore[attr-defined]</span>
+
+
+<div class="viewcode-block" id="session_scope">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.session_scope">[документация]</a>
+<span class="nd">@contextmanager</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">session_scope</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Session</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Контекстный менеджер для транзакционной работы с сессией.</span>
+
+<span class="sd">    Автоматически вызывает ``commit`` при успехе и ``rollback`` при исключении.</span>
+
+<span class="sd">    Yields:</span>
+<span class="sd">        Активная :class:`~sqlalchemy.orm.Session`.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        with session_scope() as session:</span>
+<span class="sd">            result = session.execute(select(Bank)).scalars().all()</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">get_engine</span><span class="p">()</span>
+    <span class="n">session</span><span class="p">:</span> <span class="n">Session</span> <span class="o">=</span> <span class="n">SessionLocal</span><span class="p">()</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">_session_user_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># AutoDealer triggers resolve the current user via USER_CONNECTION:</span>
+            <span class="c1">#   SELECT USER_ID FROM USER_CONNECTION</span>
+            <span class="c1">#   WHERE USER_CONNECTION_ID = CURRENT_CONNECTION</span>
+            <span class="c1"># Register this connection so triggers can find the user.</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+                <span class="n">text</span><span class="p">(</span>
+                    <span class="s2">&quot;UPDATE OR INSERT INTO user_connection&quot;</span>
+                    <span class="s2">&quot; (user_connection_id, user_id)&quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot; VALUES (CURRENT_CONNECTION, </span><span class="si">{</span><span class="n">_session_user_id</span><span class="si">}</span><span class="s2">)&quot;</span>
+                    <span class="s2">&quot; MATCHING (user_connection_id)&quot;</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">yield</span> <span class="n">session</span>
+        <span class="n">session</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
+    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+        <span class="n">session</span><span class="o">.</span><span class="n">rollback</span><span class="p">()</span>
+        <span class="k">raise</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="n">session</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="get_session">
+<a class="viewcode-back" href="../../api/connection.html#autodealer.connection.get_session">[документация]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_session</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Generator</span><span class="p">[</span><span class="n">Session</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Генератор сессии для интеграции с FastAPI и подобными фреймворками.</span>
+
+<span class="sd">    Yields:</span>
+<span class="sd">        :class:`~sqlalchemy.orm.Session`</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        # FastAPI</span>
+<span class="sd">        def get_banks(session: Session = Depends(get_session)):</span>
+<span class="sd">            return session.execute(select(Bank)).scalars().all()</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">get_engine</span><span class="p">()</span>
+    <span class="n">session</span><span class="p">:</span> <span class="n">Session</span> <span class="o">=</span> <span class="n">SessionLocal</span><span class="p">()</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">yield</span> <span class="n">session</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="n">session</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+
+
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;Base&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;SessionLocal&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;engine&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;get_connection_url&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;create_db_engine&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;get_engine&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;configure_database&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;configure_engine&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;session_scope&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;get_session&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;set_session_user&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">autodealer</a></h1>
+
+
+
+<p class="blurb">Python ORM-обёртка для базы данных АвтоДилер (Firebird)</p>
+
+
+
+
+<p>
+<iframe src="https://ghbtns.com/github-btn.html?user=om1ji&repo=autodealer-wrapper&type=watch&count=true&size=large&v=2"
+  allowtransparency="true" frameborder="0" scrolling="0" width="200px" height="35px"></iframe>
+</p>
+
+
+
+
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Искать" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script><h3>Навигация</h3>
+<p class="caption" role="heading"><span class="caption-text">Содержание</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Быстрый старт</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/queryset.html">QuerySet API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/connection.html">Подключение и сессии</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Код модуля</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2025, Om1ji.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 8.2.3</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 1.0.0</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

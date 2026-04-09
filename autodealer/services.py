@@ -6,28 +6,24 @@ hiding the directory_registry / trigger bookkeeping from the caller.
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Optional
-
 
 from sqlalchemy import text
 
 from autodealer.connection import session_scope
-from autodealer.domain.client import Client
-from autodealer.domain.directory_registry import DirectoryRegistry
-from autodealer.domain.model_detail import ModelDetail
-from autodealer.domain.model_link import ModelLink
+from datetime import datetime
+
 
 # metatable_id=1 → ORGANIZATION
 _METATABLE_ORGANIZATION = 1
-# metatable_id=3 → CLIENT
-_METATABLE_CLIENT = 3
-# metatable_id=4 → MODEL_DETAIL (справочник autodealer)
-_METATABLE_MODEL_DETAIL = 4
 # Системный пользователь по умолчанию
 _SYSTEM_USER_ID = 1
-# client_tree_id=1 — «Физические лица»
-_CLIENT_TREE_PHYSICAL = 1
+
+_METATABLE_DOCUMENT_OUT = 12
+
+_SERVICE_ORDER_PREFIX = "АВТ"
+
+_DOCUMENT_STATE = {"Оформлен": 4, "Черновик": 2, "Удалён": -1}
 
 
 # ---------------------------------------------------------------------------
@@ -296,400 +292,54 @@ def create_organization(
 
 
 # ---------------------------------------------------------------------------
-# Клиенты
+# Комплексные работы (service_complex_work)
 # ---------------------------------------------------------------------------
 
 
-def find_client_by_phone(phone: str) -> Optional[int]:
-    """Найти клиента по номеру телефона (поле mobile в contact).
+def iter_complex_works_by_tree(
+    tree_id: int,
+) -> "Generator[ServiceComplexWork, None, None]":
+    """Генератор всех :class:`~autodealer.domain.service_complex_work.ServiceComplexWork`
+    принадлежащих дереву ``tree_id``.
 
-    Возвращает ``client_id`` или ``None`` если не найден.
+    Обходит ``service_complex_work_item`` → ``service_complex_work`` без загрузки
+    всех записей в память сразу.
+
+    Args:
+        tree_id: ``service_complex_work_tree_id``.
+
+    Yields:
+        Экземпляры :class:`~autodealer.domain.service_complex_work.ServiceComplexWork`
+        упорядоченные по ``(service_complex_work_item_id, position_number)``.
 
     Example::
 
-        client_id = find_client_by_phone("79991697059")
+        from autodealer.services import iter_complex_works_by_tree
+
+        for work in iter_complex_works_by_tree(11):
+            print(work.name, work.price)
     """
-    if not phone:
-        return None
-    with session_scope() as session:
-        dr_id = session.execute(
-            text(
-                "SELECT c.directory_registry_link_id FROM contact c"
-                " WHERE c.mobile = :phone AND c.hidden = 0"
-                " ROWS 1"
-            ),
-            {"phone": phone},
-        ).scalar()
-        if dr_id is None:
-            return None
-        return session.execute(
-            text("SELECT client_id FROM client WHERE directory_registry_id = :dr_id"),
-            {"dr_id": dr_id},
-        ).scalar()
 
+    from autodealer.domain.service_complex_work import ServiceComplexWork
+    from autodealer.domain.service_complex_work_item import ServiceComplexWorkItem
 
-def create_client(
-    fullname: str,
-    *,
-    phone: Optional[str] = None,
-    email: Optional[str] = None,
-    birth: Optional[date] = None,
-    sex: Optional[int] = None,
-    discount: float = 0.0,
-    discount_work: float = 0.0,
-    client_tree_id: int = _CLIENT_TREE_PHYSICAL,
-    created_by_user_id: int = _SYSTEM_USER_ID,
-) -> int:
-    """Создать клиента в Firebird.
+    item_ids = [
+        item.service_complex_work_item_id
+        for item in ServiceComplexWorkItem.objects.filter(
+            service_complex_work_tree_id=tree_id
+        ).all()
+    ]
 
-    Атомарно создаёт цепочку:
-    ``DirectoryRegistry (metatable=3)`` → ``Client`` → ``Contact`` (если есть phone/email).
+    if not item_ids:
+        return
 
-    Args:
-        fullname: Полное имя клиента (обязательно).
-        phone: Мобильный телефон.
-        email: Email.
-        birth: Дата рождения.
-        sex: 1=муж, 2=жен, None=не указан.
-        discount: Скидка на товары %.
-        discount_work: Скидка на работы %.
-        client_tree_id: Папка клиентов (1=Физлица, 2=Юрлица, 3=VIP).
-        created_by_user_id: Пользователь-создатель.
-
-    Returns:
-        ``client_id`` созданного клиента.
-
-    Example::
-
-        from datetime import date
-        from autodealer.services import create_client
-
-        client_id = create_client(
-            "Иванов Иван Иванович",
-            phone="79991234567",
-            email="ivan@example.com",
-            birth=date(1990, 5, 15),
-            sex=1,
-            discount=5.0,
-        )
-    """
-    shortname = fullname[:30]
-
-    with session_scope() as session:
-        # 1. DirectoryRegistry
-        dr = DirectoryRegistry(
-            metatable_id=_METATABLE_CLIENT,
-            create_user_id=created_by_user_id,
-            change_user_id=created_by_user_id,
-        )
-        session.add(dr)
-        session.flush()
-        dr_id = dr.directory_registry_id
-
-        # 2. Client
-        session.execute(
-            text(
-                "INSERT INTO client"
-                " (directory_registry_id, client_tree_id, fullname, shortname,"
-                "  face, hidden, discount, discount_work, sex, birth)"
-                " VALUES"
-                " (:dr_id, :tree_id, :fullname, :shortname,"
-                "  0, 0, :discount, :discount_work, :sex, :birth)"
-            ),
-            {
-                "dr_id": dr_id,
-                "tree_id": client_tree_id,
-                "fullname": fullname,
-                "shortname": shortname,
-                "discount": discount,
-                "discount_work": discount_work,
-                "sex": sex,
-                "birth": birth,
-            },
-        )
-        client_id = session.execute(
-            text("SELECT client_id FROM client WHERE directory_registry_id = :dr_id"),
-            {"dr_id": dr_id},
-        ).scalar()
-
-        # 3. Contact (если есть phone или email)
-        if phone or email:
-            session.execute(
-                text(
-                    "INSERT INTO contact"
-                    " (directory_registry_link_id, mobile, email,"
-                    "  default_contact, hidden, face)"
-                    " VALUES (:dr_id, :mobile, :email, 1, 0, 0)"
-                ),
-                {"dr_id": dr_id, "mobile": phone, "email": email},
-            )
-
-    return client_id
-
-
-def add_vehicle_to_client(
-    client_id: int,
-    make: str,
-    model_name: str,
-    *,
-    regno: Optional[str] = None,
-    vin: Optional[str] = None,
-    year: Optional[int] = None,
-    color: Optional[str] = None,
-    default_car: bool = False,
-    created_by_user_id: int = _SYSTEM_USER_ID,
-) -> int:
-    """Добавить автомобиль клиенту по имени марки и модели.
-
-    Автоматически находит или создаёт ``mark``, ``model``, ``color``,
-    затем создаёт ``model_detail`` + ``model_link``.
-
-    Идемпотентность: если машина с таким ``regno`` уже существует в БД —
-    возвращает существующий ``model_detail_id`` без создания дубликата.
-
-    Args:
-        client_id: PK клиента в Firebird.
-        make: Марка («Toyota», «BMW»).
-        model_name: Модель («Camry», «X5»).
-        regno: Госномер.
-        vin: VIN-номер.
-        year: Год выпуска (например 2020).
-        color: Цвет строкой («Белый», «Чёрный»).
-        default_car: Пометить как основное авто клиента.
-        created_by_user_id: Пользователь-создатель.
-
-    Returns:
-        ``model_detail_id`` созданного или уже существующего автомобиля.
-
-    Example::
-
-        from autodealer.services import add_vehicle_to_client
-
-        md_id = add_vehicle_to_client(
-            client_id=42,
-            make="Toyota",
-            model_name="Camry",
-            regno="А001ВС77",
-            year=2020,
-            color="Белый",
-            default_car=True,
-        )
-    """
-    # Проверяем дубликат по госномеру
-    if regno:
-        existing = find_vehicle_by_regno(regno)
-        if existing is not None:
-            return existing
-
-    mark_id = get_or_create_mark(make)
-    model_id = get_or_create_model(mark_id, model_name)
-    color_id = get_or_create_color(color) if color else None
-    year_date = date(year, 1, 1) if year else None
-
-    link = create_vehicle_for_client(
-        client_id=client_id,
-        model_id=model_id,
-        regno=regno,
-        vin=vin,
-        year_of_production=year_date,
-        color_id=color_id,
-        default_car=default_car,
-        created_by_user_id=created_by_user_id,
-    )
-    return link.model_detail_id
-
-
-def get_or_create_mark(name: str) -> int:
-    """Найти марку по имени или создать новую. Возвращает mark_id."""
-    # raw SQL: ORM filter на String-полях бьёт баг sqlalchemy-firebird render_bind_cast
-    with session_scope() as session:
-        existing = session.execute(
-            text("SELECT mark_id FROM mark WHERE name = :name"), {"name": name}
-        ).scalar()
-        if existing is not None:
-            return existing
-        session.execute(
-            text("INSERT INTO mark (name, hidden) VALUES (:name, 0)"), {"name": name}
-        )
-        return session.execute(
-            text("SELECT mark_id FROM mark WHERE name = :name"), {"name": name}
-        ).scalar()
-
-
-def get_or_create_model(mark_id: int, model_name: str) -> int:
-    """Найти модель по марке и имени или создать новую. Возвращает model_id."""
-    with session_scope() as session:
-        existing = session.execute(
-            text(
-                "SELECT model_id FROM model WHERE mark_id = :mark_id AND name = :name"
-            ),
-            {"mark_id": mark_id, "name": model_name},
-        ).scalar()
-        if existing is not None:
-            return existing
-        session.execute(
-            text(
-                "INSERT INTO model (mark_id, name, hidden) VALUES (:mark_id, :name, 0)"
-            ),
-            {"mark_id": mark_id, "name": model_name},
-        )
-        return session.execute(
-            text(
-                "SELECT model_id FROM model WHERE mark_id = :mark_id AND name = :name"
-            ),
-            {"mark_id": mark_id, "name": model_name},
-        ).scalar()
-
-
-def get_or_create_color(name: str) -> Optional[int]:
-    """Найти цвет по имени или создать новый. Возвращает color_id или None если name пустой."""
-    if not name:
-        return None
-    with session_scope() as session:
-        existing = session.execute(
-            text("SELECT color_id FROM color WHERE name = :name"), {"name": name}
-        ).scalar()
-        if existing is not None:
-            return existing
-        session.execute(
-            text("INSERT INTO color (name, hidden) VALUES (:name, 0)"), {"name": name}
-        )
-        return session.execute(
-            text("SELECT color_id FROM color WHERE name = :name"), {"name": name}
-        ).scalar()
-
-
-def find_vehicle_by_regno(regno: str) -> Optional[int]:
-    """Найти автомобиль по госномеру. Возвращает model_detail_id или None."""
-    if not regno:
-        return None
-    # Используем raw SQL чтобы обойти баг sqlalchemy-firebird visit_VARCHAR
-    with session_scope() as session:
-        return session.execute(
-            text("SELECT model_detail_id FROM model_detail WHERE regno = :regno"),
-            {"regno": regno},
-        ).scalar()
-
-
-def find_vehicle_by_vin(vin: str) -> Optional[int]:
-    """Найти автомобиль по VIN. Возвращает model_detail_id или None."""
-    if not vin:
-        return None
-    with session_scope() as session:
-        return session.execute(
-            text("SELECT model_detail_id FROM model_detail WHERE vin = :vin"),
-            {"vin": vin},
-        ).scalar()
-
-
-def create_vehicle_for_client(
-    *,
-    client_id: int,
-    model_id: int,
-    vin: Optional[str] = None,
-    regno: Optional[str] = None,
-    year_of_production: Optional[date] = None,
-    color_id: Optional[int] = None,
-    car_engine_type_id: Optional[int] = None,
-    car_gearbox_type_id: Optional[int] = None,
-    car_body_type_id: Optional[int] = None,
-    car_fuel_type_id: Optional[int] = None,
-    engine_number: Optional[str] = None,
-    chassis: Optional[str] = None,
-    body: Optional[str] = None,
-    notes: Optional[str] = None,
-    default_car: bool = False,
-    created_by_user_id: int = _SYSTEM_USER_ID,
-) -> ModelLink:
-    """Create a vehicle and attach it to a client.
-
-    Performs three inserts in a single transaction:
-    1. ``directory_registry`` — audit record for the new model_detail.
-    2. ``model_detail``       — the specific vehicle (VIN, regno, specs).
-    3. ``model_link``         — the link between the vehicle and the client.
-
-    Args:
-        client_id: PK of the client who owns the vehicle.
-        model_id: PK of the make/model (e.g. Toyota Camry → ``model.model_id``).
-        vin: Vehicle identification number.
-        regno: State registration plate (госномер).
-        year_of_production: Year/date of manufacture.
-        color_id: FK to ``color`` table.
-        car_engine_type_id: FK to ``car_engine_type``.
-        car_gearbox_type_id: FK to ``car_gearbox_type``.
-        car_body_type_id: FK to ``car_body_type``.
-        car_fuel_type_id: FK to ``car_fuel_type``.
-        engine_number: Engine serial number.
-        chassis: Chassis number.
-        body: Body number.
-        notes: Free-text notes.
-        default_car: If ``True``, marks this as the client's primary vehicle.
-        created_by_user_id: User performing the operation (written to
-            ``directory_registry``). Defaults to the system user (id=1).
-
-    Returns:
-        The newly created :class:`~autodealer.domain.model_link.ModelLink`
-        instance (detached from session).
-
-    Raises:
-        ValueError: If the client with ``client_id`` does not exist.
-
-    Example:
-        >>> from autodealer.services import create_vehicle_for_client
-        >>> link = create_vehicle_for_client(
-        ...     client_id=100,
-        ...     model_id=7,          # Audi A3
-        ...     vin="WAUZZZ8P9BA012345",
-        ...     regno="А001ВС77",
-        ...     default_car=True,
-        ... )
-        >>> print(link.model_link_id)
-    """
-    with session_scope() as session:
-        client = session.get(Client, client_id)
-        if client is None:
-            raise ValueError(f"Client with id={client_id} does not exist.")
-
-        client_directory_registry_id = client.directory_registry_id
-        session.expunge(client)
-
-    # --- Step 1: directory_registry для model_detail ---
-    dir_reg = DirectoryRegistry.objects.create(
-        metatable_id=_METATABLE_MODEL_DETAIL,
-        create_user_id=created_by_user_id,
-        change_user_id=created_by_user_id,
+    works = (
+        ServiceComplexWork.objects.filter(service_complex_work_item_id__in=item_ids)
+        .order_by("service_complex_work_item_id", "position_number")
+        .all()
     )
 
-    # --- Step 2: model_detail ---
-    detail_fields: dict = dict(
-        model_id=model_id,
-        directory_registry_id=dir_reg.directory_registry_id,
-    )
-    optional = dict(
-        vin=vin,
-        regno=regno,
-        year_of_production=year_of_production,
-        color_id=color_id,
-        car_engine_type_id=car_engine_type_id,
-        car_gearbox_type_id=car_gearbox_type_id,
-        car_body_type_id=car_body_type_id,
-        car_fuel_type_id=car_fuel_type_id,
-        engine_number=engine_number,
-        chassis=chassis,
-        body=body,
-        notes=notes,
-    )
-    detail_fields.update({k: v for k, v in optional.items() if v is not None})
-    model_detail = ModelDetail.objects.create(**detail_fields)
-
-    # --- Step 3: model_link (привязка к клиенту) ---
-    model_link = ModelLink.objects.create(
-        model_detail_id=model_detail.model_detail_id,
-        directory_registry_link_id=client_directory_registry_id,
-        default_car=1 if default_car else 0,
-    )
-
-    return model_link
+    yield from works
 
 
 # ---------------------------------------------------------------------------
@@ -803,7 +453,7 @@ class ServiceOrder:
         date_payment: Дата оплаты.
         document_number: Номер документа из document_out_header.
         date_create: Дата создания из document_out_header.
-        model_link_id: Привязанное авто (из document_service_detail).
+        client_car: Привязанное авто (из document_service_detail).
         items: Список строк услуг (:class:`ServiceOrderItem`).
     """
 
@@ -815,7 +465,7 @@ class ServiceOrder:
         self.date_payment = row.get("date_payment")
         self.document_number: Optional[int] = row.get("document_number")
         self.date_create = row.get("date_create")
-        self.model_link_id: Optional[int] = row.get("model_link_id")
+        self.client_car: Optional[int] = row.get("client_car")
         self.items: list[ServiceOrderItem] = items
 
     def __repr__(self) -> str:
@@ -845,7 +495,7 @@ def get_service_order(document_out_id: int) -> Optional["ServiceOrder"]:
                     "SELECT do2.document_out_id, do2.client_id, do2.summa,"
                     "       do2.date_accept, do2.date_payment,"
                     "       doh.number AS document_number, doh.date_create,"
-                    "       dsd.model_link_id"
+                    "       dsd.client_car"
                     " FROM document_out do2"
                     " LEFT JOIN document_out_header doh"
                     "        ON doh.document_out_id = do2.document_out_id"
@@ -894,22 +544,27 @@ def create_service_order(
     *,
     client_id: int,
     items: list[ServiceOrderItem],
-    model_link_id: Optional[int] = None,
-    date_accept: Optional[object] = None,
+    document_out_tree_id: int,
+    organization_id: int,
+    client_car: Optional[int] = None,
+    date_start: datetime,
+    date_finish: datetime,
     created_by_user_id: int = _SYSTEM_USER_ID,
+    notes: str | None = None,
+    service_order_suffix: str | None = None,
 ) -> int:
     """Создать заказ-наряд с услугами для клиента.
 
     Создаёт цепочку:
     1. ``document_out``           — документ (Заказ-наряд, client_id, summa).
     2. ``document_out_header``    — заголовок (номер, дата, user_id).
-    3. ``document_service_detail``— привязка авто (model_link_id), если передан.
+    3. ``document_service_detail``— привязка авто (client_car), если передан.
     4. ``service_work`` × N      — строки услуг.
 
     Args:
         client_id: PK клиента в Firebird.
         items: Список услуг (:class:`ServiceOrderItem`).
-        model_link_id: PK из ``model_link`` — привязка конкретного авто к документу.
+        client_car: PK из ``model_link`` — привязка конкретного авто к документу.
         date_accept: Дата/время приёма авто (``datetime``). По умолчанию — сейчас.
         created_by_user_id: user_id исполнителя (записывается в ``document_out_header``).
 
@@ -921,7 +576,7 @@ def create_service_order(
         from autodealer.services import create_service_order, ServiceOrderItem
         doc_id = create_service_order(
             client_id=42,
-            model_link_id=7,
+            client_car=7,
             items=[
                 ServiceOrderItem("Экспресс мойка", price=600, time_value=20),
                 ServiceOrderItem("Чернение резины", price=150, time_value=10),
@@ -929,100 +584,277 @@ def create_service_order(
         )
     """
     from datetime import datetime as _dt
+    from autodealer.domain.document_out import DocumentOut
+    from autodealer.domain.document_out_header import DocumentOutHeader
+    from autodealer.domain.document_registry import DocumentRegistry
+    from autodealer.domain.document_service_detail import DocumentServiceDetail
+    from autodealer.domain.service_work import ServiceWork
 
     if not items:
         raise ValueError("items не может быть пустым")
 
-    accept_dt = date_accept or _dt.now()
+    finish_dt = date_finish or _dt.now()
     summa = sum(i.price * i.quantity for i in items)
 
     with session_scope() as session:
         # 1. document_out
-        session.execute(
-            text(
-                "INSERT INTO document_out"
-                " (document_type_id, client_id, summa, date_accept)"
-                " VALUES (:doc_type, :client_id, :summa, :date_accept)"
-            ),
-            {
-                "doc_type": _DOCUMENT_TYPE_SERVICE_ORDER,
-                "client_id": client_id,
-                "summa": summa,
-                "date_accept": accept_dt,
-            },
+        doc_out = DocumentOut(
+            document_type_id=_DOCUMENT_TYPE_SERVICE_ORDER,
+            client_id=client_id,
+            summa=summa,
+            date_accept=finish_dt,
+            organization_id=organization_id,
         )
-        document_out_id = session.execute(
+        session.add(doc_out)
+        session.flush()
+
+        # 2. document_registry
+        doc_reg = DocumentRegistry(
+            metatable_id=_METATABLE_DOCUMENT_OUT,
+            create_user_id=created_by_user_id,
+            change_user_id=created_by_user_id,
+            create_date=date_start,
+            change_date=date_start,
+            document_type_id_cache=_DOCUMENT_TYPE_SERVICE_ORDER,
+        )
+        session.add(doc_reg)
+        session.flush()
+
+        # 3. document_out_header
+        next_number = session.execute(
             text(
-                "SELECT MAX(document_out_id) FROM document_out"
-                " WHERE document_type_id = :doc_type AND client_id = :client_id"
+                "SELECT MAX(number) + 1 FROM document_out_header WHERE document_type_id = :t"
             ),
-            {"doc_type": _DOCUMENT_TYPE_SERVICE_ORDER, "client_id": client_id},
+            {"t": _DOCUMENT_TYPE_SERVICE_ORDER},
         ).scalar()
 
-        # 2. document_out_header
-        session.execute(
-            text(
-                "INSERT INTO document_out_header"
-                " (document_out_id, document_type_id, user_id, date_create)"
-                " VALUES (:doc_out_id, :doc_type, :user_id, :date_create)"
-            ),
-            {
-                "doc_out_id": document_out_id,
-                "doc_type": _DOCUMENT_TYPE_SERVICE_ORDER,
-                "user_id": created_by_user_id,
-                "date_create": accept_dt,
-            },
+        doc_header = DocumentOutHeader(
+            document_out_id=doc_out.document_out_id,
+            document_type_id=_DOCUMENT_TYPE_SERVICE_ORDER,
+            document_out_tree_id=document_out_tree_id,
+            document_registry_id=doc_reg.document_registry_id,
+            user_id=created_by_user_id,
+            date_create=finish_dt,
+            notes=notes,
+            number=next_number,
+            suffix=service_order_suffix,
+            prefix=_SERVICE_ORDER_PREFIX,
+            state=_DOCUMENT_STATE["Черновик"],
         )
+        session.add(doc_header)
+        session.flush()
 
-        # 3. document_service_detail (привязка авто, опционально)
-        if model_link_id is not None:
-            doh_id = session.execute(
-                text(
-                    "SELECT document_out_header_id FROM document_out_header"
-                    " WHERE document_out_id = :doc_out_id"
-                ),
-                {"doc_out_id": document_out_id},
-            ).scalar()
-            session.execute(
-                text(
-                    "INSERT INTO document_service_detail"
-                    " (document_out_header_id, model_link_id)"
-                    " VALUES (:doh_id, :model_link_id)"
-                ),
-                {"doh_id": doh_id, "model_link_id": model_link_id},
+        # 4. document_service_detail (привязка авто, опционально)
+        if client_car is not None:
+            session.add(
+                DocumentServiceDetail(
+                    document_out_header_id=doc_header.document_out_header_id,
+                    model_link_id=client_car,
+                )
             )
 
-        # 4. service_work — строки услуг
+        # 5. service_work — строки услуг
         for pos, item in enumerate(items, 1):
-            params: dict = {
-                "doc_out_id": document_out_id,
-                "name": item.name,
-                "price": item.price,
-                "time_value": item.time_value,
-                "quantity": item.quantity,
-                "pos": pos,
-            }
-            if item.external_id:
-                session.execute(
-                    text(
-                        "INSERT INTO service_work"
-                        " (document_out_id, name, price, time_value, quantity,"
-                        "  position_number, external_id)"
-                        " VALUES (:doc_out_id, :name, :price, :time_value, :quantity,"
-                        "  :pos, :ext_id)"
-                    ),
-                    {**params, "ext_id": item.external_id},
+            session.add(
+                ServiceWork(
+                    document_out_id=doc_out.document_out_id,
+                    name=item.name,
+                    price=item.price,
+                    time_value=item.time_value,
+                    quantity=item.quantity,
+                    position_number=pos,
+                    external_id=item.external_id or None,
                 )
-            else:
-                session.execute(
-                    text(
-                        "INSERT INTO service_work"
-                        " (document_out_id, name, price, time_value, quantity,"
-                        "  position_number)"
-                        " VALUES (:doc_out_id, :name, :price, :time_value, :quantity,"
-                        "  :pos)"
-                    ),
-                    params,
-                )
+            )
+
+        document_out_id = doc_out.document_out_id
 
     return document_out_id
+
+
+def create_payment(
+    *,
+    document_out_id: int,
+    summa: float,
+    wallet_id: int,
+    payment_type_id: int,
+    payment_date: Optional[datetime] = None,
+    notes: Optional[str] = None,
+) -> int:
+    """Создать документ оплаты для заказ-наряда.
+
+    .. deprecated::
+        Используй :func:`autodealer.actions.payment.create_payment`.
+    """
+    from autodealer.actions.payment import create_payment as _create_payment
+
+    return _create_payment(
+        document_out_id=document_out_id,
+        summa=summa,
+        wallet_id=wallet_id,
+        payment_type_id=payment_type_id,
+        payment_date=payment_date,
+        notes=notes,
+    )
+
+
+def create_service_order_from_rocketwash_category(
+    *,
+    client_id: int,
+    rocketwash_category: str,
+    client_car: Optional[int] = None,
+    date_accept: Optional[object] = None,
+    created_by_user_id: int = _SYSTEM_USER_ID,
+) -> int:
+    """Создать заказ-наряд со всеми работами из категории RocketWash.
+
+    По маппингу ``rocketwash_category`` → ``service_complex_work_tree_id``
+    подбираются все :class:`~autodealer.domain.service_complex_work.ServiceComplexWork`
+    из соответствующего дерева и вставляются в заказ-наряд как строки услуг.
+
+    Args:
+        client_id: PK клиента в Firebird.
+        rocketwash_category: Категория из RocketWash (напр. ``"Кат.01"``).
+        client_car: PK из ``model_link`` — привязка конкретного авто.
+        date_accept: Дата/время приёма. По умолчанию — текущее время.
+        created_by_user_id: user_id исполнителя.
+
+    Returns:
+        ``document_out_id`` созданного заказ-наряда.
+
+    Raises:
+        KeyError: Если категория RocketWash не найдена в маппинге.
+        ValueError: Если в категории нет ни одной работы.
+
+    Example::
+
+        from autodealer.services import create_service_order_from_rocketwash_category
+        doc_id = create_service_order_from_rocketwash_category(
+            client_id=100,
+            rocketwash_category="Кат.01",
+            client_car=3,
+        )
+    """
+    from autodealer.integration.rocketwash import get_complex_work_tree_id
+    from autodealer.domain.service_complex_work import ServiceComplexWork
+    from autodealer.domain.service_complex_work_item import ServiceComplexWorkItem
+
+    tree_id = get_complex_work_tree_id(rocketwash_category)
+
+    # Все items дерева → все работы
+    item_ids = [
+        item.service_complex_work_item_id
+        for item in ServiceComplexWorkItem.objects.filter(
+            service_complex_work_tree_id=tree_id
+        ).all()
+    ]
+    if not item_ids:
+        raise ValueError(
+            f"Нет групп работ для категории {rocketwash_category!r} (tree_id={tree_id})"
+        )
+
+    works = (
+        ServiceComplexWork.objects.filter(service_complex_work_item_id__in=item_ids)
+        .order_by("position_number")
+        .all()
+    )
+
+    if not works:
+        raise ValueError(
+            f"Нет работ для категории {rocketwash_category!r} (tree_id={tree_id})"
+        )
+
+    items = [
+        ServiceOrderItem(
+            name=w.name,
+            price=float(w.price or 0),
+            time_value=float(w.time_value or 0),
+            quantity=w.quantity or 1,
+            external_id=str(w.service_complex_work_id),
+        )
+        for w in works
+    ]
+
+    return create_service_order(
+        client_id=client_id,
+        items=items,
+        client_car=client_car,
+        date_accept=date_accept,
+        created_by_user_id=created_by_user_id,
+    )
+
+
+def create_service_order_from_rocketwash_services(
+    *,
+    client_id: int,
+    rw_service_ids: list[int],
+    car_type_id: int,
+    client_car: Optional[int] = None,
+    date_accept: Optional[object] = None,
+    created_by_user_id: int = _SYSTEM_USER_ID,
+) -> int:
+    """Создать заказ-наряд из конкретных услуг RocketWash для заданной категории авто.
+
+    По ``car_type_id`` определяет категорию авто (``"Кат.01"`` … ``"Кат.04"``),
+    фильтрует ``rw_service_ids`` через маппинг и берёт цены из ``rocketwash.db``
+    для этой категории.
+
+    Args:
+        client_id: PK клиента в Firebird.
+        rw_service_ids: Список id услуг из RocketWash (``services.id``).
+        car_type_id: RocketWash ``car_type_id`` (35=Кат.04, 36=Кат.01, 37=Кат.02, 38=Кат.03).
+        client_car: PK из ``model_link`` — привязка конкретного авто.
+        date_accept: Дата/время приёма. По умолчанию — текущее время.
+        created_by_user_id: user_id исполнителя.
+
+    Returns:
+        ``document_out_id`` созданного заказ-наряда.
+
+    Raises:
+        KeyError: Если ``car_type_id`` неизвестен или услуга не найдена в маппинге.
+        ValueError: Если ни одна из услуг не смаппирована.
+
+    Example::
+
+        from autodealer.services import create_service_order_from_rocketwash_services
+
+        doc_id = create_service_order_from_rocketwash_services(
+            client_id=100,
+            rw_service_ids=[821460, 821462, 821476],
+            car_type_id=36,   # Кат.01 — Седан
+            client_car=3,
+        )
+    """
+    from autodealer.integration.rocketwash import (
+        _resolve_mapped_services,
+        _get_cw_name,
+        get_car_category_by_type_id,
+    )
+
+    car_category = get_car_category_by_type_id(car_type_id)
+    mapped = _resolve_mapped_services(rw_service_ids, car_category)
+
+    if not mapped:
+        raise ValueError(
+            f"Ни одна из услуг {rw_service_ids} не смаппирована "
+            f"для категории {car_category!r}"
+        )
+
+    items = [
+        ServiceOrderItem(
+            name=_get_cw_name(svc.service_id) or svc.name[:255],
+            price=svc.price or 0.0,
+            time_value=svc.duration or 0.0,
+            quantity=1,
+            external_id=str(svc.service_id),
+        )
+        for svc in mapped
+    ]
+
+    return create_service_order(
+        client_id=client_id,
+        items=items,
+        client_car=client_car,
+        date_accept=date_accept,
+        created_by_user_id=created_by_user_id,
+    )
