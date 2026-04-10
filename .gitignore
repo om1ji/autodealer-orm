@@ -208,3 +208,17 @@ __marimo__/
 venv/
 .DS_Store
 CLAUDE.md
+
+# Firebird database files
+*.fdb
+*.gdb
+
+# SQLite databases (RocketWash parser)
+rocketwash.db
+*.db
+
+# Built Sphinx docs (output artifacts)
+docs/
+
+# main.py может содержать реальные данные подключения
+main.py
