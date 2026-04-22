@@ -118,9 +118,59 @@ RocketWash использует числовой ``car_type_id``, AutoDealer —
 Вспомогательные функции (``autodealer.integration.rocketwash``)
 ----------------------------------------------------------------
 
+.. function:: autodealer.integration.rocketwash.resolve_complex_work(rw_service_id, car_type_id=None, car_type=None)
+
+   Полный резолв услуги RocketWash в запись ``service_complex_work``
+   АвтоДилера. Ключевая функция для создания заказ-нарядов в
+   «справочном» режиме (с ``rt_work_id`` и каноническим именем работы).
+
+   Алгоритм:
+
+   1. ``rw_service_id`` → канонический ``name`` через внутренний маппинг
+      (только для услуг, присутствующих в обеих системах).
+   2. ``car_type_id`` / ``car_type`` → категория через
+      :func:`resolve_car_category`.
+   3. Категория → ``service_complex_work_tree_id``.
+   4. В дереве ищется запись с совпадающим ``name``.
+
+   :param int rw_service_id: ``services.id`` из RocketWash.
+   :param int car_type_id: ``reservations.car_type_id`` — и актуальный
+       (35/36/37/38), и устаревшие значения (3/27/28/29).
+   :param str car_type: Строка ``reservations.car_type`` — fallback,
+       когда ``car_type_id`` не в маппинге.
+   :returns: Кортеж ``(service_complex_work_id, name, price)`` или ``None``.
+
+   .. code-block:: python
+
+      from autodealer.integration.rocketwash import resolve_complex_work
+
+      resolve_complex_work(821459, car_type_id=37)         # → (94, "Стандарт", 1200.0)
+      resolve_complex_work(821459, car_type_id=27)         # → тот же результат (устаревший id)
+      resolve_complex_work(821459, car_type="Кат. 2")      # → то же (по строке)
+      resolve_complex_work(999999, car_type_id=37)         # → None (нет в маппинге)
+
+.. function:: autodealer.integration.rocketwash.resolve_car_category(car_type_id=None, car_type=None)
+
+   Определить категорию АвтоДилера по RW ``car_type_id`` и/или строке
+   ``car_type``. Сначала ищет по id, потом fallback через нормализованную
+   строку (``"Кат. 2"`` → ``"Кат.02"``).
+
+   :returns: ``"Кат.01"`` / ``"Кат.02"`` / ``"Кат.03"`` / ``"Кат.04"``
+       или ``None`` если не удалось определить.
+
+   .. code-block:: python
+
+      from autodealer.integration.rocketwash import resolve_car_category
+
+      resolve_car_category(27)                 # → "Кат.02"
+      resolve_car_category(99, "Кат. 2")       # → "Кат.02" (fallback)
+      resolve_car_category(99, "мусор")        # → None
+
 .. function:: autodealer.integration.rocketwash.get_car_category_by_type_id(car_type_id)
 
-   Возвращает строку категории (``"Кат.01"`` … ``"Кат.04"``) по ``car_type_id`` RocketWash.
+   Возвращает строку категории по ``car_type_id`` RocketWash.
+   Старая версия — выбрасывает ``KeyError`` на неизвестные id. Для
+   нового кода предпочтительнее :func:`resolve_car_category`.
 
    :raises KeyError: Если ``car_type_id`` неизвестен.
 
